@@ -39,7 +39,7 @@ void setup()
 
   // init cybergear driver
   init_can();
-  controller.init(motor_ids, MODE_CURRENT, &CAN0);
+  controller.init(motor_ids, MODE_POSITION, &CAN0);
 
   delay(1000);
   M5.Lcd.fillScreen(BLACK);
