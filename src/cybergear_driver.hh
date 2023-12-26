@@ -10,6 +10,7 @@
  */
 struct MotorStatus
 {
+  unsigned long stamp_usec;     //< timestamp
   uint8_t motor_id;             //!< motor id
   float position;               //!< encoder position (-4pi to 4pi)
   float velocity;               //!< motor velocity (-30rad/s to 30rad/s)

@@ -200,6 +200,7 @@ bool CybergearDriver::update_motor_status(unsigned long id, const uint8_t * data
   motor_status_.raw_temperature = data[7] | data[6] << 8;
 
   // convert motor data
+  motor_status_.stamp_usec = micros();
   motor_status_.motor_id = motor_can_id;
   motor_status_.position = uint_to_float(motor_status_.raw_position, P_MIN, P_MAX);
   motor_status_.velocity = uint_to_float(motor_status_.raw_velocity, V_MIN, V_MAX);

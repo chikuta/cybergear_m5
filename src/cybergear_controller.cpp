@@ -191,6 +191,7 @@ bool CybergearController::send_motion_command(const std::vector<uint8_t> ids, co
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_motion_command(ids[idx], cmds[idx]);
+    process_can_packet();
   }
   return ret;
 }
@@ -199,9 +200,10 @@ bool CybergearController::send_motion_command(uint8_t id, const CybergearMotionC
 {
   if (!check_motor_id(id)) return false;
   float pos = std::max(std::min(cmd.position, sw_configs_[id].upper_position_limit), sw_configs_[id].lower_position_limit);
+  float cmd_pos = (pos - sw_configs_[id].position_offset) * sw_configs_[id].direction;
   float vel = std::max(std::min(sw_configs_[id].direction * cmd.velocity, sw_configs_[id].limit_speed), -sw_configs_[id].limit_speed);
   float eff = std::max(std::min(sw_configs_[id].direction * cmd.effort, sw_configs_[id].limit_torque), -sw_configs_[id].limit_torque);
-  drivers_[id].motor_control(pos, vel, eff, cmd.kp, cmd.kd);
+  drivers_[id].motor_control(cmd_pos, vel, eff, cmd.kp, cmd.kd);
   return true;
 }
 
@@ -213,6 +215,7 @@ bool CybergearController::send_position_command(const std::vector<uint8_t> ids, 
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_position_command(ids[idx], positions[idx]);
+    process_can_packet();
   }
   return ret;
 }
@@ -234,6 +237,7 @@ bool CybergearController::send_speed_command(const std::vector<uint8_t> ids, con
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_speed_command(ids[idx], speeds[idx]);
+    process_can_packet();
   }
   return ret;
 }
@@ -254,6 +258,7 @@ bool CybergearController::send_current_command(const std::vector<uint8_t> ids, c
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_current_command(ids[idx], currents[idx]);
+    process_can_packet();
   }
   return ret;
 }

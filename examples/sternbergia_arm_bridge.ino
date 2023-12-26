@@ -1,18 +1,34 @@
 #include <Arduino.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <math.h>
 #include <mcp_can.h>
 #include <M5Stack.h>
 #include <numeric>
+#include <stdexcept>
+#include <sys/types.h>
 #include <vector>
 #include "ros2_logo.hh"
 #include "cybergear_bridge.hh"
 #include "cybergear_controller.hh"
 
 
+struct Motion
+{
+  float duration;
+  std::vector<uint8_t> ids;
+  std::vector<CybergearMotionCommand> cmds;
+};
+
 /**
  * @brief Init can interface
  */
 void init_can();
+void calc_foward_kinematics(float j1, float f2, float j3);
+void calc_inverse_kinematics(float x, float y, float z);
+void execute_motion(const std::vector<Motion>& motion_seq);
+
 
 // init MCP_CAN object
 #define CAN0_INT 15  // Set INT to pin 2
@@ -24,13 +40,12 @@ const uint8_t MOT_JOINT_1 = 0x7F;
 const uint8_t MOT_JOINT_2 = 0x7E;
 const uint8_t MOT_JOINT_3 = 0x7D;
 std::vector<uint8_t> motor_ids = {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3};
-std::vector<float> init_pose = {0.0f, -M_PI/4.0, 0.0f};
-std::vector<int8_t> calib_dir = {CW, CW, CW};
+std::vector<float> init_pose = {0.0f, M_PI/4, 0.0f};
 std::vector<CybergearSoftwareConfig> sw_configs = {
    // id, direction, limit_speed, limit_current, limit_torque, upper_pos_limit, lower_pos_limit, pos_offset
   CybergearSoftwareConfig(MOT_JOINT_1, CCW, 1.0f, 1.0f, 0.5f, (float)65.0/180.0*M_PI, (float)-65.0/180.0*M_PI, CCW, (float)-65.0/180.0*M_PI),
-  CybergearSoftwareConfig(MOT_JOINT_2, CW,  1.0f, 1.0f, 0.5f, (float)M_PI/2.0f, (float)-M_PI/4.0f, CCW, (float)-M_PI/2.0f),
-  CybergearSoftwareConfig(MOT_JOINT_3, CCW, 1.0f, 1.0f, 0.5f, (float)M_PI/4.0f, (float)-M_PI, CW, (float)M_PI/4.0f)
+  CybergearSoftwareConfig(MOT_JOINT_2, CCW, 1.0f, 1.0f, 0.5f, (float)M_PI/2.0f, (float)-M_PI/4.0f, CW, (float)M_PI/2),
+  CybergearSoftwareConfig(MOT_JOINT_3, CW,  1.0f, 1.0f, 0.5f, (float)M_PI, (float)-M_PI/4.0f, CCW, (float)-30.0/180.0*M_PI)
 };
 
 // state
@@ -53,12 +68,44 @@ CybergearBridge bridge = CybergearBridge(&controller, &Serial);
 // init sprite for display
 TFT_eSprite sprite = TFT_eSprite(&sprite);
 const float init_speed = 1.0f;        //!< slow speed
-const float move_speed = 15.0f;       //!< quick speed
+const float move_speed = 10.0f;       //!< quick speed
+
+void calc_foward_kinematics(float j1, float j2, float j3, float& x, float& y, float& z)
+{
+  float l1 = 0.10;
+  float l2 = 0.15;
+  float l3 = 0.15;
+  float s1 = sin(j1);
+  float c1 = cos(j1);
+  float s2 = sin(j2);
+  float c2 = cos(j2);
+  float s23 = sin(j2 + j3);
+  float c23 = cos(j2 + j3);
+  x = c1 * (l2 * c2 + l3 * c23);
+  y = s1 * (l2 * c2 + l3 * c23);
+  z = l2 * s2 + l3 * s23;
+}
+
+void calc_inverse_kinematics(float x, float y, float z, float& j1, float& j2, float& j3)
+{
+  float l1 = 0.10;
+  float l2 = 0.15;
+  float l3 = 0.15;
+  j1 = std::atan2(y, x);
+  j3 = -std::acos((x*x + y*y + z*z - l2*l2 - l3*l3) / (2.0*l2*l3));
+  float s3 = std::sin(j3);
+  float c3 = std::cos(j3);
+  j2 = std::atan2(-l3 * s3 * std::sqrt(x*x + y*y) + (l2 + l3 * c3) * z, (l2 + l3*c3) * std::sqrt(x*x + y*y) + l3*s3*z);
+  // j2 = std::atan2(l3 * s3 * std::sqrt(x*x + y*y) + (l2 + l3 * c3) * z, -(l2 + l3*c3) * std::sqrt(x*x + y*y) + l3*s3*z);
+  j2 -= M_PI/4.0f;
+  j3 += M_PI/2.0f;
+}
 
 void setup()
 {
   M5.begin(true,true,false);
   Serial.begin(2000000);
+  // Serial.begin(115200);
   Serial.flush();
 
   M5.Lcd.fillScreen(WHITE);
@@ -201,107 +248,9 @@ void calibrate_positoin_zero_offset()
 }
 
 
-struct Motion
+void execute_motion(const std::vector<Motion>& motion_seq)
 {
-  float duration;
-  std::vector<uint8_t> ids;
-  std::vector<CybergearMotionCommand> cmds;
-};
-
-
-void demo_mode()
-{
-  controller.reset_motors();
-  for (uint8_t idx = 0; idx < motor_ids.size(); ++idx) {
-    controller.set_speed_limit(motor_ids[idx], move_speed);
-  }
-  controller.set_run_mode(MODE_POSITION);
-  controller.enable_motors();
-
-  std::vector<Motion> motion_seq = {
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {25.0/180.0 * M_PI, 1.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {-25.0/180.0 * M_PI, -1.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {1.0f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-90.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {25.0/180.0 * M_PI, 1.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {-25.0/180.0 * M_PI, -1.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {0.5f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-    }},
-    {1.0f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
-      {0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-40.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-      {-90.0/180.0 * M_PI, 0.0f, 0.0f, 1.0f, 1.0f},
-    }}
-  };
-
-  for (uint8_t motion_idx = 0; motion_idx < motion_seq.size(); ++motion_idx) {
+  for (size_t motion_idx = 0; motion_idx < motion_seq.size(); ++motion_idx) {
     unsigned long duration = static_cast<unsigned long>(motion_seq[motion_idx].duration * 1000.0f);
     unsigned long end_time = static_cast<unsigned long>(millis() + duration);
     while (millis() < end_time) {
@@ -312,6 +261,130 @@ void demo_mode()
       }
       delay(1);
     }
+  }
+}
+
+
+void demo_mode()
+{
+  controller.reset_motors();
+  for (uint8_t idx = 0; idx < motor_ids.size(); ++idx) {
+    // controller.set_speed_limit(motor_ids[idx], move_speed);
+    controller.set_speed_limit(motor_ids[idx], move_speed);
+  }
+  // controller.set_run_mode(MODE_POSITION);
+  controller.set_run_mode(MODE_POSITION);
+  controller.enable_motors();
+
+  // y-z plane circle
+  {
+    std::vector<Motion> motion_seq;
+    for (uint8_t cnt = 0; cnt < 2; ++cnt) {
+      for (uint8_t idx = 0; idx < 100; ++idx) {
+        float j1, j2, j3;
+        float x = 0.20;
+        float y = 0.05 * std::cos(2 * M_PI / 100 * idx);
+        float z = 0.05 * std::sin(2 * M_PI / 100 * idx);
+        calc_inverse_kinematics(x, y, z, j1, j2, j3);
+        Motion mot = {0.01f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+          {j1, 3.0f, 1.0f, 1.0f},
+          {j2, 3.0f, 1.0f, 1.0f},
+          {j3, 3.0f, 1.0f, 1.0f},
+        }};
+        motion_seq.push_back(mot);
+      }
+    }
+    execute_motion(motion_seq);
+  }
+
+  // x-y plane circle
+  {
+    std::vector<Motion> motion_seq;
+    for (uint8_t cnt = 0; cnt < 2; ++cnt) {
+      for (uint8_t idx = 0; idx < 100; ++idx) {
+        float j1, j2, j3;
+        float x = 0.05 * std::cos(2 * M_PI / 100 * idx) + 0.20;
+        float y = 0.05 * std::sin(2 * M_PI / 100 * idx);
+        float z = 0.1;
+        calc_inverse_kinematics(x, y, z, j1, j2, j3);
+        Motion mot = {0.01f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+          {j1, 3.0f, 10.0f, 1.0f, 1.0f},
+          {j2, 3.0f, 10.0f, 1.0f, 1.0f},
+          {j3, 3.0f, 10.0f, 1.0f, 1.0f},
+        }};
+        motion_seq.push_back(mot);
+      }
+    }
+    execute_motion(motion_seq);
+  }
+
+  // x-z plane circle
+  {
+    std::vector<Motion> motion_seq;
+    for (uint8_t cnt = 0; cnt < 2; ++cnt) {
+      for (uint8_t idx = 0; idx < 100; ++idx) {
+        float j1, j2, j3;
+        float x = 0.05 * std::cos(2 * M_PI / 100 * idx) + 0.2;
+        float y = 0.0;
+        float z = 0.05 * std::sin(2 * M_PI / 100 * idx);
+        calc_inverse_kinematics(x, y, z, j1, j2, j3);
+        Motion mot = {0.01f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+          {j1, 3.0f, 10.0f, 1.0f, 1.0f},
+          {j2, 3.0f, 10.0f, 1.0f, 1.0f},
+          {j3, 3.0f, 10.0f, 1.0f, 1.0f},
+        }};
+        motion_seq.push_back(mot);
+      }
+    }
+    execute_motion(motion_seq);
+  }
+
+  // y-z plane
+  {
+    std::vector<Motion> motion_seq;
+    for (uint8_t cnt = 0; cnt < 3; ++cnt) {
+      float duration = 0.01f + (2 - cnt) * 0.01f;
+      for (uint8_t idx = 0; idx < 100; ++idx) {
+        float j1, j2, j3;
+        float x = 0.2;
+        float y = -0.15 + 0.3 / 100 * idx;
+        float z = 0.05 * std::sin(10 * M_PI/100 * idx);
+        calc_inverse_kinematics(x, y, z, j1, j2, j3);
+        Motion mot = {duration, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+          {j1, 0.0f, 10.0f, 1.0f, 1.0f},
+          {j2, 0.0f, 10.0f, 1.0f, 1.0f},
+          {j3, 0.0f, 10.0f, 1.0f, 1.0f},
+        }};
+        motion_seq.push_back(mot);
+      }
+      for (uint8_t idx = 0; idx < 100; ++idx) {
+        float j1, j2, j3;
+        float x = 0.2;
+        float y = 0.15 - 0.3 / 100 * idx;
+        float z = 0.05 * std::sin(10 * M_PI/100 * idx);
+        calc_inverse_kinematics(x, y, z, j1, j2, j3);
+        Motion mot = {duration, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+          {j1, 0.0f, 10.0f, 1.0f, 1.0f},
+          {j2, 0.0f, 10.0f, 1.0f, 1.0f},
+          {j3, 0.0f, 10.0f, 1.0f, 1.0f},
+        }};
+        motion_seq.push_back(mot);
+      }
+    }
+    execute_motion(motion_seq);
+  }
+
+
+  // set init pose
+  {
+    std::vector<Motion> motion_seq;
+    Motion mot = {2.0f, {MOT_JOINT_1, MOT_JOINT_2, MOT_JOINT_3}, {
+      {init_pose[0], 0.0f, 10.0f, 1.0f, 1.0f},
+      {init_pose[1], 0.0f, 10.0f, 1.0f, 1.0f},
+      {init_pose[2], 0.0f, 10.0f, 1.0f, 1.0f},
+    }};
+    motion_seq.push_back(mot);
+    execute_motion(motion_seq);
   }
 
   controller.reset_motors();
