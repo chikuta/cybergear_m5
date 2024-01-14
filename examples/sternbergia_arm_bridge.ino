@@ -28,7 +28,14 @@ void init_can();
 void calc_foward_kinematics(float j1, float f2, float j3);
 void calc_inverse_kinematics(float x, float y, float z);
 void execute_motion(const std::vector<Motion>& motion_seq);
+void process_can_task(void *pvParameters);
+void loop_task(void *pvParameters);
 
+// for task
+unsigned long int_cnt = 0;
+QueueHandle_t msg_queue;
+TaskHandle_t process_can_task_handle;
+TaskHandle_t loop_task_handle;
 
 // init MCP_CAN object
 #define CAN0_INT 15  // Set INT to pin 2
@@ -112,6 +119,8 @@ void setup()
   M5.Lcd.drawBitmap((M5.Lcd.width() - imgWidth)/2, (M5.Lcd.height() - imgHeight)/2, imgWidth, imgHeight, (uint16_t *)img);
 
   // init cybergear driver
+  msg_queue = xQueueCreate(4, sizeof(int8_t));
+  attachInterrupt(CAN0_INT, can_receive_event, FALLING);
   init_can();
 
   controller.init(motor_ids, sw_configs, MODE_CURRENT, &CAN0);
@@ -127,37 +136,74 @@ void setup()
   sprite.setColorDepth(8);
   sprite.setTextSize(2);
   sprite.createSprite(M5.Lcd.width(), M5.Lcd.height());
+
+  xTaskCreateUniversal(loop_task, "loop_task", 8192, NULL, 1, &loop_task_handle, CONFIG_ARDUINO_RUNNING_CORE);
+  xTaskCreateUniversal(process_can_task, "process_can_task", 8192, NULL, 5, &process_can_task_handle, APP_CPU_NUM);
+}
+
+void can_receive_event()
+{
+  int_cnt++;
+  int8_t data = 0;
+  xQueueSendFromISR(msg_queue, &data, 0);
+}
+
+void process_can_task(void *pvParameters)
+{
+  uint8_t data;
+  while (true)
+  {
+    xQueueReceive(msg_queue, &data, portMAX_DELAY);
+    bridge.process_motor_response();
+  }
 }
 
 void loop()
 {
-  // update m5 satatus
-  M5.update();
+  delay(1);
+}
 
-  if (M5.BtnA.wasPressed()) {
-    calibrate_positoin_zero_offset();
+void loop_task(void *pvParameters)
+{
+  while (true)
+  {
+    // update m5 satatus
+    M5.update();
 
-  } else if (M5.BtnB.wasPressed()) {
-    demo_mode();
+    if (M5.BtnA.wasPressed()) {
+      calibrate_positoin_zero_offset();
 
-  } else if (M5.BtnC.wasPressed()) {
-    current_mode = INITIAL_STATE;
-    controller.reset_motors();
-    for (uint8_t idx = 0; idx < motor_ids.size(); ++idx) {
-      controller.set_mech_position_to_zero(motor_ids[idx]);
+    } else if (M5.BtnB.wasPressed()) {
+      demo_mode();
+
+    } else if (M5.BtnC.wasPressed()) {
+      if (current_mode == POSITION_CONTROL_MODE) {
+        current_mode = INITIAL_STATE;
+        controller.reset_motors();
+        controller.set_run_mode(MODE_CURRENT);
+        for (uint8_t idx = 0; idx < motor_ids.size(); ++idx) {
+          controller.set_speed_limit(motor_ids[idx], INITIAL_POSE_MOVE_SPEED);
+        }
+        controller.enable_motors();
+
+      } else {
+        current_mode = POSITION_CONTROL_MODE;
+        controller.reset_motors();
+        controller.set_run_mode(MODE_POSITION);
+        for (uint8_t idx = 0; idx < motor_ids.size(); ++idx) {
+          controller.set_speed_limit(motor_ids[idx], move_speed);
+        }
+        controller.enable_motors();
+      }
     }
-  }
 
-  if (current_mode == POSITION_CONTROL_MODE) {
-    bridge.process_request_command();
-    bridge.process_motor_response();
+    if (current_mode == POSITION_CONTROL_MODE) {
+      bridge.process_request_command();
 
-  } else if (current_mode == INITIAL_STATE) {
-    bridge.process_motor_response();
-    controller.send_current_command(motor_ids, {0.0, 0.0, 0.0});
-  }
+    } else if (current_mode == INITIAL_STATE) {
+      controller.send_current_command(motor_ids, {0.0, 0.0, 0.0});
+    }
 
-  if ( controller.process_can_packet() ) {
     std::vector<MotorStatus> status_list;
     if (controller.get_motor_status(status_list)) {
       uint16_t bg_color = (current_mode == INITIAL_STATE) ? BLACK : BLUE;

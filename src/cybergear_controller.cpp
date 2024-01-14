@@ -8,7 +8,10 @@ CybergearController::CybergearController(uint8_t master_can_id)
   : can_(NULL)
   , master_can_id_(master_can_id)
   , recv_count_(0)
-{}
+  , can_mutex_(NULL)
+{
+  can_mutex_ = xSemaphoreCreateMutex();
+}
 
 CybergearController::~CybergearController()
 {}
@@ -136,25 +139,31 @@ bool CybergearController::set_position_control_gain(uint8_t id, float kp)
 bool CybergearController::set_velocity_control_gain(uint8_t id, float kp, float ki)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   drivers_[id].set_velocity_kp(kp);
   drivers_[id].set_velocity_ki(ki);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
 bool CybergearController::set_current_control_param(uint8_t id, float kp, float ki, float gain)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   drivers_[id].set_current_kp(kp);
   drivers_[id].set_current_ki(ki);
   drivers_[id].set_current_filter_gain(gain);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
 bool CybergearController::enable_motor(uint8_t id, uint8_t mode)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   drivers_[id].init_motor(mode);
   drivers_[id].enable_motor();
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
@@ -191,7 +200,7 @@ bool CybergearController::send_motion_command(const std::vector<uint8_t> ids, co
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_motion_command(ids[idx], cmds[idx]);
-    process_can_packet();
+    // process_can_packet();
   }
   return ret;
 }
@@ -199,11 +208,13 @@ bool CybergearController::send_motion_command(const std::vector<uint8_t> ids, co
 bool CybergearController::send_motion_command(uint8_t id, const CybergearMotionCommand& cmd)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   float pos = std::max(std::min(cmd.position, sw_configs_[id].upper_position_limit), sw_configs_[id].lower_position_limit);
   float cmd_pos = (pos - sw_configs_[id].position_offset) * sw_configs_[id].direction;
   float vel = std::max(std::min(sw_configs_[id].direction * cmd.velocity, sw_configs_[id].limit_speed), -sw_configs_[id].limit_speed);
   float eff = std::max(std::min(sw_configs_[id].direction * cmd.effort, sw_configs_[id].limit_torque), -sw_configs_[id].limit_torque);
   drivers_[id].motor_control(cmd_pos, vel, eff, cmd.kp, cmd.kd);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
@@ -215,7 +226,7 @@ bool CybergearController::send_position_command(const std::vector<uint8_t> ids, 
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_position_command(ids[idx], positions[idx]);
-    process_can_packet();
+    // process_can_packet();
   }
   return ret;
 }
@@ -223,9 +234,11 @@ bool CybergearController::send_position_command(const std::vector<uint8_t> ids, 
 bool CybergearController::send_position_command(uint8_t id, float position)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   float pos = std::max(std::min(position, sw_configs_[id].upper_position_limit), sw_configs_[id].lower_position_limit);
   float cmd_pos = (pos - sw_configs_[id].position_offset) * sw_configs_[id].direction;
   drivers_[id].set_position_ref(cmd_pos);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
@@ -237,7 +250,7 @@ bool CybergearController::send_speed_command(const std::vector<uint8_t> ids, con
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_speed_command(ids[idx], speeds[idx]);
-    process_can_packet();
+    // process_can_packet();
   }
   return ret;
 }
@@ -245,8 +258,10 @@ bool CybergearController::send_speed_command(const std::vector<uint8_t> ids, con
 bool CybergearController::send_speed_command(uint8_t id, float speed)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   float vel = std::max(std::min(sw_configs_[id].direction * speed, sw_configs_[id].limit_speed), -sw_configs_[id].limit_speed);
   drivers_[id].set_speed_ref(vel);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
@@ -258,7 +273,7 @@ bool CybergearController::send_current_command(const std::vector<uint8_t> ids, c
   bool ret = true;
   for (uint8_t idx = 0; idx < ids.size(); ++idx) {
     ret &= send_current_command(ids[idx], currents[idx]);
-    process_can_packet();
+    // process_can_packet();
   }
   return ret;
 }
@@ -266,15 +281,19 @@ bool CybergearController::send_current_command(const std::vector<uint8_t> ids, c
 bool CybergearController::send_current_command(uint8_t id, float current)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   float cur = std::max(std::min(sw_configs_[id].direction * current, sw_configs_[id].limit_current), -sw_configs_[id].limit_current);
   drivers_[id].set_current_ref(cur);
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
 bool CybergearController::set_mech_position_to_zero(uint8_t id)
 {
   if (!check_motor_id(id)) return false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(10)) == pdFALSE) return false;
   drivers_[id].set_mech_position_to_zero();
+  xSemaphoreGive(can_mutex_);
   return true;
 }
 
@@ -310,12 +329,17 @@ bool CybergearController::get_software_config(uint8_t id, CybergearSoftwareConfi
 bool CybergearController::process_can_packet()
 {
   bool is_updated = false;
+  if (xSemaphoreTake(can_mutex_, static_cast<portTickType>(100)) != pdTRUE) return false;
 
-  while ( can_->checkReceive() == CAN_MSGAVAIL ) {
+  while (can_->checkReceive() == CAN_MSGAVAIL) {
     // receive data
     unsigned long id;
     uint8_t len;
-    if (can_->readMsgBuf(&id, &len, receive_buffer_) == CAN_NOMSG) {
+
+    uint8_t ret = CAN_NOMSG;
+    ret = can_->readMsgBuf(&id, &len, receive_buffer_);
+
+    if (ret == CAN_NOMSG) {
       break;
     }
 
@@ -337,6 +361,7 @@ bool CybergearController::process_can_packet()
       recv_count_++;
     }
   }
+  xSemaphoreGive(can_mutex_);
 
   return is_updated;
 }

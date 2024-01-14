@@ -365,6 +365,7 @@ private:
   uint8_t control_mode_;
 
   MCP_CAN *can_;
+  xSemaphoreHandle can_mutex_;
   uint8_t master_can_id_;
   uint8_t receive_buffer_[64];
   unsigned long recv_count_;
