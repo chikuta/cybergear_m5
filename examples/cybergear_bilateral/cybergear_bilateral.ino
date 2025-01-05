@@ -1,11 +1,12 @@
 #include <Arduino.h>
 #include <M5Stack.h>
 #include <math.h>
-#include "cybergear_controller.hh"
+
+#include "cybergear_m5/cybergear_controller.hh"
 #ifdef USE_ESP32_CAN
-#include "cybergear_can_interface_esp32.hh"
+#include "cybergear_m5/cybergear_can_interface_esp32.hh"
 #else
-#include "cybergear_can_interface_mcp.hh"
+#include "cybergear_m5/cybergear_can_interface_mcp.hh"
 #endif
 
 // setup master can id and motor can id (default cybergear can id is 0x7F)
@@ -58,7 +59,7 @@ void loop()
 
   // update and get motor data
   std::vector<MotorStatus> status_list;
-  if ( controller.process_packet() ) {
+  if (controller.process_packet()) {
     controller.get_motor_status(status_list);
   }
 

@@ -1,6 +1,7 @@
 #include <Arduino.h>
-#include <math.h>
 #include <M5Stack.h>
+#include <math.h>
+
 #include "cybergear_driver.hh"
 
 // #define USE_ESP32_CAN  // If you want to use ESP32_CAN or PWRCAN, please uncomment this line
@@ -11,9 +12,9 @@
 #include "cybergear_can_interface_mcp.hh"
 #endif
 
-#define INC_POSITION  20.0
-#define INC_VELOCITY  0.4
-#define INC_TORQUE    0.04
+#define INC_POSITION 20.0
+#define INC_VELOCITY 0.4
+#define INC_TORQUE 0.04
 
 /**
  * @brief Draw display
@@ -48,16 +49,16 @@ CybergearCanInterfaceMcp interface;
 // init sprite for display
 TFT_eSprite sprite = TFT_eSprite(&sprite);
 
-uint8_t mode = MODE_POSITION;   //!< current mode
-float target_pos = 0.0;         //!< motor target position
-float target_vel = 0.0;         //!< motor target velocity
-float target_torque = 0.0;      //!< motor target torque
-float dir = 1.0f;               //!< direction for motion mode
-float default_kp = 50.0f;       //!< default kp for motion mode
-float default_kd = 1.0f;        //!< default kd for motion mode
-float init_speed = 30.0f;       //!< initial speed
-float slow_speed = 1.0f;        //!< slow speed
-bool state_change_flag = false; //!< state change flag
+uint8_t mode = MODE_POSITION;    //!< current mode
+float target_pos = 0.0;          //!< motor target position
+float target_vel = 0.0;          //!< motor target velocity
+float target_torque = 0.0;       //!< motor target torque
+float dir = 1.0f;                //!< direction for motion mode
+float default_kp = 50.0f;        //!< default kp for motion mode
+float default_kd = 1.0f;         //!< default kd for motion mode
+float init_speed = 30.0f;        //!< initial speed
+float slow_speed = 1.0f;         //!< slow speed
+bool state_change_flag = false;  //!< state change flag
 
 void setup()
 {
@@ -128,8 +129,7 @@ void draw_display(uint8_t mode, bool is_mode_change)
 
 void get_color_and_mode_str(uint8_t mode, uint16_t & color, String & mode_str)
 {
-  switch (mode)
-  {
+  switch (mode) {
     case MODE_POSITION:
       color = RED;
       mode_str = String("Position");
@@ -155,7 +155,7 @@ void loop()
   M5.update();
 
   // check mode change
-  if(M5.BtnB.wasPressed()) {
+  if (M5.BtnB.wasPressed()) {
     mode = (mode + 1) % MODE_CURRENT + 1;
     state_change_flag = true;
     driver.init_motor(mode);
@@ -201,22 +201,24 @@ void loop()
     }
 
     driver.set_position_ref(target_pos);
-  }
-  else if (driver.get_run_mode() == MODE_SPEED) {
+  } else if (driver.get_run_mode() == MODE_SPEED) {
     driver.set_speed_ref(target_vel);
-  }
-  else if (driver.get_run_mode() == MODE_CURRENT) {
+  } else if (driver.get_run_mode() == MODE_CURRENT) {
     driver.set_current_ref(target_torque);
-  }
-  else {
+  } else {
     target_pos += dir * 10.0 / 180.0 * M_PI;
-    if (target_pos > P_MAX) { dir = -1.0; target_pos = P_MAX; }
-    else if (target_pos < P_MIN) { dir = 1.0; target_pos = P_MIN; }
+    if (target_pos > P_MAX) {
+      dir = -1.0;
+      target_pos = P_MAX;
+    } else if (target_pos < P_MIN) {
+      dir = 1.0;
+      target_pos = P_MIN;
+    }
     driver.motor_control(target_pos, dir * target_vel, dir * target_torque, default_kd, default_kd);
   }
 
   // update and get motor data
-  if ( driver.process_packet() ) {
+  if (driver.process_packet()) {
     motor_status = driver.get_motor_status();
     draw_display(mode);
   }

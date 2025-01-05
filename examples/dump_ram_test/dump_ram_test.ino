@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include <M5Stack.h>
-#include "cybergear_driver.hh"
+
+#include "cybergear_m5/cybergear_driver.hh"
 
 #define USE_ESP32_CAN
 #ifdef USE_ESP32_CAN
-#include "cybergear_can_interface_esp32.hh"
+#include "cybergear_m5/cybergear_can_interface_esp32.hh"
 #else
-#include "cybergear_can_interface_mcp.hh"
+#include "cybergear_m5/cybergear_can_interface_mcp.hh"
 #endif
 
 // setup master can id and motor can id (default cybergear can id is 0x7F)

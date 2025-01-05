@@ -1,12 +1,13 @@
 #include <Arduino.h>
-#include <math.h>
 #include <M5Stack.h>
-#include "cybergear_driver.hh"
+#include <math.h>
+
+#include "cybergear_m5/cybergear_driver.hh"
 
 #ifdef USE_ESP32_CAN
-#include "cybergear_can_interface_esp32.hh"
+#include "cybergear_m5/cybergear_can_interface_esp32.hh"
 #else
-#include "cybergear_can_interface_mcp.hh"
+#include "cybergear_m5/cybergear_can_interface_mcp.hh"
 #endif
 
 // setup master can id and motor can id (default cybergear can id is 0x7F)
@@ -29,7 +30,8 @@ void setup()
 
   // init cybergear driver
   M5.Lcd.printf("Start change_motor_can_id\n");
-  M5.Lcd.printf("Change motor can id from [0x%02x] to [0x%02x]\n", MOT_CURRENT_CAN_ID, MOT_NEXT_CAN_ID);
+  M5.Lcd.printf(
+    "Change motor can id from [0x%02x] to [0x%02x]\n", MOT_CURRENT_CAN_ID, MOT_NEXT_CAN_ID);
 
   interface.init();
   driver.init(&interface);
@@ -37,7 +39,4 @@ void setup()
   driver.change_motor_can_id(MOT_NEXT_CAN_ID);
 }
 
-void loop()
-{
-  M5.update();
-}
+void loop() { M5.update(); }
